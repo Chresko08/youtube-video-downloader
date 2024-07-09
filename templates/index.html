@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YouTube Video Downloader</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="/static/styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
 </head>
 <body>
@@ -15,5 +15,24 @@
             <button type="submit" class="btn">Download</button>
         </form>
     </div>
+    <div class="cursor"></div>
 </body>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const cursor = document.querySelector('.cursor');
+
+    document.addEventListener('mousemove', (e) => {
+        cursor.style.left = e.pageX + 'px';
+        cursor.style.top = e.pageY + 'px';
+    });
+
+    document.addEventListener('mousedown', () => {
+        cursor.style.transform = 'scale(0.7)';
+    });
+
+    document.addEventListener('mouseup', () => {
+        cursor.style.transform = 'scale(1)';
+    });
+});
+</script>
 </html>

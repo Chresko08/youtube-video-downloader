@@ -3,6 +3,7 @@
     padding: 0;
     box-sizing: border-box;
     font-family: 'Roboto', sans-serif;
+    cursor: none; /* Hide the default cursor */
 }
 
 body {
@@ -12,6 +13,7 @@ body {
     height: 100vh;
     background: linear-gradient(135deg, #ff7e5f, #feb47b);
     color: #fff;
+    position: relative;
 }
 
 .container {
@@ -67,6 +69,18 @@ input:focus {
 .btn:hover {
     background: #feb47b;
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.cursor {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    position: absolute;
+    pointer-events: none;
+    transition: transform 0.1s ease-in-out;
+    transform: translate(-50%, -50%);
+    z-index: 1000;
 }
 
 @keyframes fadeIn {
