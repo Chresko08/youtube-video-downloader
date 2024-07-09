@@ -10,29 +10,59 @@
 <body>
     <div class="container">
         <h1>YouTube Video Downloader</h1>
-        <form action="/download" method="post">
+        <form id="download-form">
             <input type="text" id="url" name="url" placeholder="Enter YouTube video link" required>
-            <button type="submit" class="btn">Download</button>
+            <div class="button-container">
+                <button type="button" class="btn" id="usable-quality-btn" data-action="usable">Download in Usable Quality</button>
+                <button type="button" class="btn" id="best-quality-btn" data-action="best">Download in Best Quality</button>
+            </div>
         </form>
+        <div id="loading" class="loading">
+            <div class="spinner"></div>
+            <p>Downloading...</p>
+        </div>
+        <div id="message" class="message"></div>
     </div>
-    <div class="cursor"></div>
+    <script>
+        document.getElementById('usable-quality-btn').addEventListener('click', function() {
+            submitForm('usable');
+        });
+
+        document.getElementById('best-quality-btn').addEventListener('click', function() {
+            submitForm('best');
+        });
+
+        function submitForm(action) {
+            document.getElementById('loading').style.display = 'flex';
+            document.getElementById('message').style.display = 'none';
+
+            const url = document.getElementById('url').value;
+            const formData = new FormData();
+            formData.append('url', url);
+            formData.append('action', action);
+
+            fetch('/download', {
+                method: 'POST',
+                body: formData,
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('loading').style.display = 'none';
+                const messageDiv = document.getElementById('message');
+                if (data.success) {
+                    messageDiv.textContent = 'Download complete! Check your downloads folder.';
+                } else {
+                    messageDiv.textContent = `Error: ${data.error}`;
+                }
+                messageDiv.style.display = 'block';
+            })
+            .catch(error => {
+                document.getElementById('loading').style.display = 'none';
+                const messageDiv = document.getElementById('message');
+                messageDiv.textContent = `Error: ${error}`;
+                messageDiv.style.display = 'block';
+            });
+        }
+    </script>
 </body>
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-    const cursor = document.querySelector('.cursor');
-
-    document.addEventListener('mousemove', (e) => {
-        cursor.style.left = e.pageX + 'px';
-        cursor.style.top = e.pageY + 'px';
-    });
-
-    document.addEventListener('mousedown', () => {
-        cursor.style.transform = 'scale(0.7)';
-    });
-
-    document.addEventListener('mouseup', () => {
-        cursor.style.transform = 'scale(1)';
-    });
-});
-</script>
 </html>
