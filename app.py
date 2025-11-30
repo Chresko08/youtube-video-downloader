@@ -38,18 +38,25 @@ def download_video():
             }],
         }
 
-    # Add common options to bypass bot detection
+    # Add comprehensive options to bypass bot detection and cookie requirements
     ydl_opts.update({
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web'],
-                'player_skip': ['webpage', 'configs', 'js'],
-                'zerorating': ['1'],
+                'player_client': ['android', 'ios', 'web'],
+                'player_skip': ['webpage', 'configs'],
+                'skip': ['hls', 'dash'],
             }
         },
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-        }
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
+        'nocheckcertificate': True,
+        'ignoreerrors': False,
+        'no_warnings': False,
+        'source_address': '0.0.0.0',
     })
 
     try:
@@ -76,7 +83,20 @@ def get_formats():
     if not url:
         return jsonify({"success": False, "error": "Missing URL parameter."})
 
-    ydl_opts = {'quiet': True}
+
+    ydl_opts = {
+        'quiet': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web'],
+                'player_skip': ['webpage', 'configs'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        'nocheckcertificate': True,
+    }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
