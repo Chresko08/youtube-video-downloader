@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,62 +8,171 @@
     <link rel="stylesheet" href="/static/styles.css">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
 </head>
+
 <body>
+    <button id="theme-toggle" class="theme-toggle" aria-label="Toggle dark mode">
+        <span class="sun-icon">☀️</span>
+        <span class="moon-icon">🌙</span>
+    </button>
+
     <div class="container">
         <h1>YouTube Video Downloader</h1>
         <form id="download-form">
             <input type="text" id="url" name="url" placeholder="Enter YouTube video link" required>
             <div class="button-container">
-                <button type="button" class="btn" id="usable-quality-btn" data-action="usable">Download in Usable Quality</button>
-                <button type="button" class="btn" id="best-quality-btn" data-action="best">Download in Best Quality</button>
+                <button type="button" class="btn" id="get-formats-btn">Get Available Qualities</button>
             </div>
         </form>
+
+        <div id="formats-container" class="formats-container" style="display: none;">
+            <h3>Select Quality</h3>
+            <div id="formats-list" class="formats-list"></div>
+        </div>
+
         <div id="loading" class="loading">
             <div class="spinner"></div>
-            <p>Downloading...</p>
+            <p id="loading-text">Processing...</p>
         </div>
         <div id="message" class="message"></div>
     </div>
     <script>
-        document.getElementById('usable-quality-btn').addEventListener('click', function() {
-            submitForm('usable');
+        // Theme toggle functionality
+        const themeToggle = document.getElementById('theme-toggle');
+        const body = document.body;
+
+        // Check for saved theme preference or default to light mode
+        const currentTheme = localStorage.getItem('theme') || 'light';
+        body.classList.add(currentTheme + '-mode');
+
+        themeToggle.addEventListener('click', () => {
+            if (body.classList.contains('light-mode')) {
+                body.classList.replace('light-mode', 'dark-mode');
+                localStorage.setItem('theme', 'dark');
+            } else {
+                body.classList.replace('dark-mode', 'light-mode');
+                localStorage.setItem('theme', 'light');
+            }
         });
 
-        document.getElementById('best-quality-btn').addEventListener('click', function() {
-            submitForm('best');
+        document.getElementById('get-formats-btn').addEventListener('click', function () {
+            getFormats();
         });
 
-        function submitForm(action) {
+        function getFormats() {
+            const url = document.getElementById('url').value;
+            if (!url) {
+                alert("Please enter a URL");
+                return;
+            }
+
             document.getElementById('loading').style.display = 'flex';
+            document.getElementById('loading-text').textContent = "Fetching formats...";
             document.getElementById('message').style.display = 'none';
+            document.getElementById('formats-container').style.display = 'none';
+
+            const formData = new FormData();
+            formData.append('url', url);
+
+            fetch('/get-formats', {
+                method: 'POST',
+                body: formData,
+            })
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('loading').style.display = 'none';
+                    if (data.success) {
+                        displayFormats(data.formats);
+                    } else {
+                        showMessage(`Error: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('loading').style.display = 'none';
+                    showMessage(`Error: ${error}`);
+                });
+        }
+
+        function displayFormats(formats) {
+            const list = document.getElementById('formats-list');
+            list.innerHTML = '';
+
+            if (formats.length === 0) {
+                list.innerHTML = '<p>No video formats found.</p>';
+                return;
+            }
+
+            // Deduplicate by resolution for cleaner UI? 
+            // Or just show all? Let's show all for now but maybe group?
+            // User asked for "all available options".
+
+            formats.forEach(fmt => {
+                const item = document.createElement('div');
+                item.className = 'format-item';
+
+                const info = document.createElement('span');
+                info.textContent = `${fmt.resolution} (${fmt.ext})`;
+
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-sm';
+                btn.textContent = 'Download';
+                btn.onclick = () => downloadVideo(fmt.format_id);
+
+                item.appendChild(info);
+                item.appendChild(btn);
+                list.appendChild(item);
+            });
+
+            document.getElementById('formats-container').style.display = 'block';
+        }
+
+        function downloadVideo(formatId) {
+            document.getElementById('loading').style.display = 'flex';
+            document.getElementById('loading-text').textContent = "Downloading...";
+            document.getElementById('formats-container').style.display = 'none';
 
             const url = document.getElementById('url').value;
             const formData = new FormData();
             formData.append('url', url);
-            formData.append('action', action);
+            formData.append('format_id', formatId);
 
             fetch('/download', {
                 method: 'POST',
                 body: formData,
             })
-            .then(response => response.json())
-            .then(data => {
-                document.getElementById('loading').style.display = 'none';
-                const messageDiv = document.getElementById('message');
-                if (data.success) {
-                    messageDiv.textContent = 'Download complete! Check your downloads folder.';
-                } else {
-                    messageDiv.textContent = `Error: ${data.error}`;
-                }
-                messageDiv.style.display = 'block';
-            })
-            .catch(error => {
-                document.getElementById('loading').style.display = 'none';
-                const messageDiv = document.getElementById('message');
-                messageDiv.textContent = `Error: ${error}`;
-                messageDiv.style.display = 'block';
-            });
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('loading').style.display = 'none';
+                    if (data.success) {
+                        showMessage(`Starting download...`);
+                        // Use anchor tag to force filename
+                        const a = document.createElement('a');
+                        a.href = data.download_url;
+                        a.download = data.filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    } else {
+                        showMessage(`Error: ${data.error}`);
+                    }
+                })
+                .catch(error => {
+                    document.getElementById('loading').style.display = 'none';
+                    showMessage(`Error: ${error}`);
+                });
+        }
+
+        function showMessage(msg) {
+            const messageDiv = document.getElementById('message');
+            messageDiv.textContent = msg;
+            messageDiv.style.display = 'block';
         }
     </script>
+
+    <footer class="footer">
+        <p>Created by <strong>Shubham Srivastava</strong> © 2024</p>
+        <p>Improved using AI: Google Antigravity (Google DeepMind)</p>
+        <p class="last-updated">Last updated: November 30, 2025</p>
+    </footer>
 </body>
+
 </html>
