@@ -78,11 +78,15 @@
                 body: formData,
             })
                 .then(async response => {
-                    if (!response.ok) {
-                        const text = await response.text();
+                    let data;
+                    const contentType = response.headers.get("content-type");
+                    if (contentType && contentType.indexOf("application/json") !== -1) {
+                        data = await response.json();
+                        if (!response.ok) throw new Error(data.error || `Server Error ${response.status}`);
+                        return data;
+                    } else {
                         throw new Error(`Server returned ${response.status} ${response.statusText}`);
                     }
-                    return response.json();
                 })
                 .then(data => {
                     document.getElementById('loading').style.display = 'none';
@@ -94,7 +98,11 @@
                 })
                 .catch(error => {
                     document.getElementById('loading').style.display = 'none';
-                    showMessage(`Error: ${error.message || error}`);
+                    if (error.message.includes('Failed to fetch')) {
+                        showMessage(`Error: Network connection lost or server is unreachable. Please verify the backend is running.`);
+                    } else {
+                        showMessage(`Error: ${error.message || error}`);
+                    }
                 });
         }
 
@@ -146,10 +154,15 @@
                 body: formData,
             })
                 .then(async response => {
-                    if (!response.ok) {
+                    let data;
+                    const contentType = response.headers.get("content-type");
+                    if (contentType && contentType.indexOf("application/json") !== -1) {
+                        data = await response.json();
+                        if (!response.ok) throw new Error(data.error || `Server Error ${response.status}`);
+                        return data;
+                    } else {
                         throw new Error(`Server returned ${response.status} ${response.statusText}`);
                     }
-                    return response.json();
                 })
                 .then(data => {
                     document.getElementById('loading').style.display = 'none';
@@ -168,7 +181,11 @@
                 })
                 .catch(error => {
                     document.getElementById('loading').style.display = 'none';
-                    showMessage(`Error: ${error.message || error}`);
+                    if (error.message.includes('Failed to fetch')) {
+                        showMessage(`Error: Network connection lost or server is unreachable. Please verify the backend is running.`);
+                    } else {
+                        showMessage(`Error: ${error.message || error}`);
+                    }
                 });
         }
 

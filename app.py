@@ -10,6 +10,11 @@ app = Flask(__name__)
 def index():
     return render_template('index.html')
 
+@app.errorhandler(Exception)
+def handle_exception(e):
+    # Ensure all server errors return JSON instead of HTML
+    return jsonify({"success": False, "error": f"Server Error: {str(e)}"}), 500
+
 import time
 
 def cleanup_downloads():
@@ -55,6 +60,7 @@ def download_video():
 
     # Add comprehensive options to bypass bot detection and cookie requirements
     ydl_opts.update({
+        'socket_timeout': 15,
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios', 'web'],
@@ -101,6 +107,7 @@ def get_formats():
 
     ydl_opts = {
         'quiet': True,
+        'socket_timeout': 15,
         'extractor_args': {
             'youtube': {
                 'player_client': ['android', 'ios', 'web'],
