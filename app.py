@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, send_from_directory, after_this_request
 import yt_dlp
+from yt_dlp.networking.impersonate import ImpersonateTarget
 import os
 import time
 import subprocess
@@ -71,6 +72,7 @@ def download_video():
         'ignoreerrors': False,
         'no_warnings': False,
         'source_address': '0.0.0.0',
+        'impersonate': ImpersonateTarget('chrome'),
     })
 
     try:
@@ -103,6 +105,7 @@ def get_formats():
         'noplaylist': True,
         'socket_timeout': 15,
         'nocheckcertificate': True,
+        'impersonate': ImpersonateTarget('chrome'),
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

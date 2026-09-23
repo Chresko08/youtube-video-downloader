@@ -1,3 +1,4 @@
 Flask==3.1.0
 yt-dlp
 gunicorn==23.0.0
+curl_cffi
