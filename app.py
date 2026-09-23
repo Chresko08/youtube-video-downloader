@@ -1,21 +1,26 @@
 from flask import Flask, render_template, request, jsonify, send_from_directory, after_this_request
 import yt_dlp
 import os
+import time
 import subprocess
 from urllib.parse import quote
 
 app = Flask(__name__)
 
+from flask import make_response
+
 @app.route('/')
 def index():
-    return render_template('index.html')
+    response = make_response(render_template('index.html'))
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    return response
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     # Ensure all server errors return JSON instead of HTML
     return jsonify({"success": False, "error": f"Server Error: {str(e)}"}), 500
-
-import time
 
 def cleanup_downloads():
     now = time.time()
@@ -60,6 +65,7 @@ def download_video():
 
     # Add comprehensive options to bypass bot detection and cookie requirements
     ydl_opts.update({
+        'noplaylist': True,
         'socket_timeout': 15,
         'extractor_args': {
             'youtube': {
@@ -107,6 +113,7 @@ def get_formats():
 
     ydl_opts = {
         'quiet': True,
+        'noplaylist': True,
         'socket_timeout': 15,
         'extractor_args': {
             'youtube': {
