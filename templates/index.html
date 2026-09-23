@@ -77,7 +77,13 @@
                 method: 'POST',
                 body: formData,
             })
-                .then(response => response.json())
+                .then(async response => {
+                    if (!response.ok) {
+                        const text = await response.text();
+                        throw new Error(`Server returned ${response.status} ${response.statusText}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     document.getElementById('loading').style.display = 'none';
                     if (data.success) {
@@ -88,7 +94,7 @@
                 })
                 .catch(error => {
                     document.getElementById('loading').style.display = 'none';
-                    showMessage(`Error: ${error}`);
+                    showMessage(`Error: ${error.message || error}`);
                 });
         }
 
@@ -139,7 +145,12 @@
                 method: 'POST',
                 body: formData,
             })
-                .then(response => response.json())
+                .then(async response => {
+                    if (!response.ok) {
+                        throw new Error(`Server returned ${response.status} ${response.statusText}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     document.getElementById('loading').style.display = 'none';
                     if (data.success) {
@@ -157,7 +168,7 @@
                 })
                 .catch(error => {
                     document.getElementById('loading').style.display = 'none';
-                    showMessage(`Error: ${error}`);
+                    showMessage(`Error: ${error.message || error}`);
                 });
         }
 
