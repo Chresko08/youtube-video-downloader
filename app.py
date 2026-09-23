@@ -10,8 +10,23 @@ app = Flask(__name__)
 def index():
     return render_template('index.html')
 
+import time
+
+def cleanup_downloads():
+    now = time.time()
+    try:
+        for filename in os.listdir('downloads'):
+            file_path = os.path.join('downloads', filename)
+            if os.path.isfile(file_path):
+                if os.stat(file_path).st_mtime < now - 3600:
+                    os.remove(file_path)
+                    print(f"Deleted old file: {file_path}")
+    except Exception as e:
+        print(f"Cleanup error: {e}")
+
 @app.route('/download', methods=['POST'])
 def download_video():
+    cleanup_downloads()
     url = request.form.get('url')
     if not url:
         return jsonify({"success": False, "error": "Missing URL parameter."})
@@ -20,7 +35,7 @@ def download_video():
 
     if format_id:
         ydl_opts = {
-            'format': f'{format_id}+bestaudio/best', # Download selected video + best audio
+            'format': f'{format_id}+bestaudio/{format_id}', # Download selected video + best audio, or just the video if it has audio
             'outtmpl': 'downloads/%(title)s.%(ext)s',
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
@@ -105,31 +120,28 @@ def get_formats():
             
             # Filter and process formats
             for f in info.get('formats', []):
-                # We want video formats. 
-                # Note: yt-dlp separates video and audio often. 
-                # We want to show distinct video qualities (e.g. 1080p, 720p).
                 if f.get('vcodec') != 'none' and f.get('height'):
                     resolution = f'{f.get("height")}p'
-                    # Avoid duplicates for the same resolution if possible, or show them?
-                    # Let's show unique resolutions to keep it simple for the user, 
-                    # picking the best bitrate for that resolution if multiple exist?
-                    # Or just list them all. Listing all might be too much.
-                    # Let's list unique resolutions + ext.
-                    
-                    # Simple approach: Just pass relevant data and let frontend render.
-                    # But let's deduplicate by resolution for simplicity as requested "available options of video qualities"
-                    
-                    # Actually, let's just send them all but formatted nicely.
-                    # Wait, user wants "video qualities".
                     
                     fmt = {
                         'format_id': f['format_id'],
                         'ext': f['ext'],
                         'resolution': resolution,
-                        'filesize': f.get('filesize'),
+                        'filesize': f.get('filesize') or 0,
                         'note': f.get('format_note')
                     }
-                    formats.append(fmt)
+                    
+                    # If we haven't seen this resolution, or if this format is larger (better quality)
+                    if resolution not in seen_resolutions:
+                        seen_resolutions.add(resolution)
+                        formats.append(fmt)
+                    else:
+                        # Find existing format and replace if this one is better
+                        for i, existing_fmt in enumerate(formats):
+                            if existing_fmt['resolution'] == resolution:
+                                if fmt['filesize'] > existing_fmt['filesize']:
+                                    formats[i] = fmt
+                                break
             
             # Sort by height (quality) descending
             formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
@@ -140,18 +152,6 @@ def get_formats():
 
 @app.route('/files/<path:filename>')
 def serve_file(filename):
-    file_path = os.path.join('downloads', filename)
-    
-    @after_this_request
-    def delete_file(response):
-        try:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-                print(f"Deleted file: {file_path}")
-        except Exception as e:
-            print(f"Error deleting file {file_path}: {e}")
-        return response
-    
     return send_from_directory('downloads', filename, as_attachment=True, download_name=filename)
 
 # Ensure downloads directory exists
