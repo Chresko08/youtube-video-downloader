@@ -134,9 +134,68 @@ def download_video():
         return jsonify({"success": False, "error": "Missing URL parameter."})
 
     format_id = request.form.get('format_id')
-    outtmpl = os.path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s')
     ffmpeg_exe = get_ffmpeg()
+    last_error = ""
 
+    # Engine 1: pytubefix (generates PO token automatically using Node.js)
+    try:
+        from pytubefix import YouTube
+        yt = YouTube(url, client='WEB')
+        title = yt.title or f"video_{int(time.time())}"
+        safe_title = re.sub(r'[\\/*?:\'\"<>|]', '', title)[:100].strip() or f"video_{int(time.time())}"
+        timestamp = int(time.time())
+        out_filename = f"{safe_title}_{timestamp}.mp4"
+        out_file = os.path.join(DOWNLOADS_DIR, out_filename)
+
+        stream = None
+        if format_id:
+            try:
+                stream = yt.streams.get_by_itag(int(format_id))
+            except Exception:
+                pass
+            if not stream:
+                itag_map = {
+                    '401': '2160p', '400': '1440p', '399': '1080p', '398': '720p',
+                    '397': '480p', '396': '360p', '395': '240p', '394': '144p',
+                    '628': '2160p', '623': '1440p', '312': '1080p', '311': '720p',
+                    '231': '480p', '230': '360p', '229': '240p', '269': '144p'
+                }
+                target_res = itag_map.get(str(format_id))
+                if target_res:
+                    stream = yt.streams.filter(res=target_res, mime_type='video/mp4').first() or yt.streams.filter(res=target_res).first()
+
+        if not stream:
+            stream = yt.streams.get_highest_resolution() or yt.streams.first()
+
+        if stream:
+            if stream.is_progressive:
+                stream.download(output_path=DOWNLOADS_DIR, filename=out_filename)
+                if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+                    return jsonify({"success": True, "filename": out_filename, "download_url": f"/files/{quote(out_filename)}"})
+            else:
+                temp_v = os.path.join(DOWNLOADS_DIR, f"temp_v_{timestamp}.{stream.subtype or 'mp4'}")
+                stream.download(output_path=DOWNLOADS_DIR, filename=os.path.basename(temp_v))
+
+                a_stream = yt.streams.get_audio_only()
+                if a_stream:
+                    temp_a = os.path.join(DOWNLOADS_DIR, f"temp_a_{timestamp}.{a_stream.subtype or 'm4a'}")
+                    a_stream.download(output_path=DOWNLOADS_DIR, filename=os.path.basename(temp_a))
+
+                    cmd = [ffmpeg_exe, '-y', '-i', temp_v, '-i', temp_a, '-c:v', 'copy', '-c:a', 'aac', out_file]
+                    p = subprocess.run(cmd, capture_output=True, timeout=180)
+                    if os.path.exists(temp_a): os.remove(temp_a)
+                    if os.path.exists(temp_v): os.remove(temp_v)
+                    if p.returncode == 0 and os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+                        return jsonify({"success": True, "filename": out_filename, "download_url": f"/files/{quote(out_filename)}"})
+                else:
+                    os.rename(temp_v, out_file)
+                    return jsonify({"success": True, "filename": out_filename, "download_url": f"/files/{quote(out_filename)}"})
+    except Exception as pt_err:
+        last_error = f"pytubefix: {pt_err}"
+        print(f"pytubefix download failed: {pt_err}. Trying yt-dlp...")
+
+    # Engine 2: yt-dlp
+    outtmpl = os.path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s')
     if format_id:
         format_selector = f'{format_id}+234/{format_id}+233/{format_id}+bestaudio/{format_id}'
     else:
@@ -251,6 +310,42 @@ def get_formats():
     if not url:
         return jsonify({"success": False, "error": "Missing URL parameter."})
 
+    # Engine 1: pytubefix
+    try:
+        from pytubefix import YouTube
+        yt = YouTube(url, client='WEB')
+        formats = []
+        seen_resolutions = set()
+
+        for s in yt.streams.filter(progressive=True):
+            if s.resolution and s.resolution not in seen_resolutions:
+                seen_resolutions.add(s.resolution)
+                formats.append({
+                    'format_id': str(s.itag),
+                    'ext': s.subtype or 'mp4',
+                    'resolution': s.resolution,
+                    'filesize': s.filesize or 0,
+                    'note': 'Progressive'
+                })
+
+        for s in yt.streams.filter(only_video=True):
+            if s.resolution and s.resolution not in seen_resolutions:
+                seen_resolutions.add(s.resolution)
+                formats.append({
+                    'format_id': str(s.itag),
+                    'ext': s.subtype or 'mp4',
+                    'resolution': s.resolution,
+                    'filesize': s.filesize or 0,
+                    'note': f"{s.fps}fps {s.video_codec}"
+                })
+
+        formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
+        if formats:
+            return jsonify({"success": True, "formats": formats, "title": yt.title})
+    except Exception as pt_err:
+        print(f"pytubefix get_formats failed: {pt_err}. Trying yt-dlp...")
+
+    # Engine 2: yt-dlp
     ffmpeg_exe = get_ffmpeg()
     ydl_opts = {
         'quiet': True,
