@@ -99,40 +99,28 @@ def download_video():
     ffmpeg_exe = get_ffmpeg()
 
     if format_id:
-        ydl_opts = {
-            'format': f'{format_id}+bestaudio/{format_id}',
-            'outtmpl': outtmpl,
-            'ffmpeg_location': ffmpeg_exe,
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
-        }
+        format_selector = f'{format_id}+234/{format_id}+233/{format_id}+bestaudio/{format_id}'
     else:
-        ydl_opts = {
-            'format': 'bestvideo+bestaudio/best',
-            'outtmpl': outtmpl,
-            'ffmpeg_location': ffmpeg_exe,
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
-        }
+        format_selector = 'bestvideo+234/bestvideo+233/bestvideo+bestaudio/best'
 
-    ydl_opts.update({
+    ydl_opts = {
+        'format': format_selector,
+        'outtmpl': outtmpl,
+        'merge_output_format': 'mp4',
+        'ffmpeg_location': ffmpeg_exe,
         'noplaylist': True,
-        'socket_timeout': 30,
+        'socket_timeout': 45,
         'nocheckcertificate': True,
         'ignoreerrors': False,
         'no_warnings': False,
         'js_runtimes': {'node': {}, 'deno': {}},
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'visionos']
+                'player_client': ['visionos', 'mweb']
             }
         },
         'remote_components': ['ejs:github'],
-    })
+    }
 
     last_error = ""
     try:
@@ -173,7 +161,7 @@ def download_video():
         inv_data = fetch_invidious_data(vid_id)
         if inv_data:
             title = inv_data.get('title', f"video_{vid_id}")
-            safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:100]
+            safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:100].strip() or f"video_{vid_id}"
             out_file = os.path.join(DOWNLOADS_DIR, f"{safe_title}.mp4")
 
             adaptive = inv_data.get('adaptiveFormats', [])
@@ -234,7 +222,7 @@ def get_formats():
         'js_runtimes': {'node': {}, 'deno': {}},
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'visionos']
+                'player_client': ['visionos', 'mweb']
             }
         },
         'remote_components': ['ejs:github'],
@@ -249,6 +237,8 @@ def get_formats():
                 if f.get('vcodec') != 'none' and f.get('height'):
                     resolution = f'{f.get("height")}p'
                     filesize = f.get('filesize') or f.get('filesize_approx') or 0
+                    if not filesize and f.get('tbr') and info.get('duration'):
+                        filesize = int(info['duration'] * f['tbr'] * 128)
                     
                     fmt = {
                         'format_id': f['format_id'],
