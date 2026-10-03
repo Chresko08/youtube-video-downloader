@@ -78,11 +78,36 @@ def diag():
         clients = list(yt_dlp.extractor.youtube.YoutubeIE._get_requested_clients.__globals__['INNERTUBE_CLIENTS'].keys())
     except Exception:
         pass
+
+    test_res = {}
+    test_url = request.args.get('url')
+    if test_url:
+        import traceback
+        try:
+            ydl_opts = {
+                'quiet': True,
+                'noplaylist': True,
+                'socket_timeout': 30,
+                'nocheckcertificate': True,
+                'extractor_args': {
+                    'youtube': {
+                        'player_client': ['visionos', 'mweb']
+                    }
+                },
+            }
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(test_url, download=False)
+                fmts = [f.get('format_id') for f in info.get('formats', [])]
+                test_res = {"success": True, "title": info.get('title'), "formats": fmts}
+        except Exception as e:
+            test_res = {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
     return jsonify({
         "status": "ok",
         "ytdlp_version": yt_dlp.version.__version__,
         "ffmpeg": get_ffmpeg(),
-        "clients": clients
+        "clients": clients,
+        "test": test_res
     })
 
 @app.errorhandler(Exception)
