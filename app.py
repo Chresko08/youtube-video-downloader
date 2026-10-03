@@ -21,6 +21,14 @@ INVIDIOUS_INSTANCES = [
     "https://invidious.tiekoetter.com"
 ]
 
+def get_ffmpeg():
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        import shutil
+        return shutil.which('ffmpeg') or 'ffmpeg'
+
 def extract_video_id(url):
     patterns = [
         r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
@@ -46,7 +54,7 @@ def fetch_invidious_data(video_id):
                 data = json.loads(resp.read().decode('utf-8'))
                 if 'adaptiveFormats' in data or 'formatStreams' in data:
                     return data
-        except Exception as e:
+        except Exception:
             continue
     return None
 
@@ -83,11 +91,13 @@ def download_video():
 
     format_id = request.form.get('format_id')
     outtmpl = os.path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s')
+    ffmpeg_exe = get_ffmpeg()
 
     if format_id:
         ydl_opts = {
             'format': f'{format_id}+bestaudio/{format_id}',
             'outtmpl': outtmpl,
+            'ffmpeg_location': ffmpeg_exe,
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -97,6 +107,7 @@ def download_video():
         ydl_opts = {
             'format': 'bestvideo+bestaudio/best',
             'outtmpl': outtmpl,
+            'ffmpeg_location': ffmpeg_exe,
             'postprocessors': [{
                 'key': 'FFmpegVideoConvertor',
                 'preferedformat': 'mp4',
@@ -118,6 +129,7 @@ def download_video():
         'remote_components': ['ejs:github'],
     })
 
+    last_error = ""
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
@@ -147,6 +159,7 @@ def download_video():
                 encoded_filename = quote(filename)
                 return jsonify({"success": True, "filename": filename, "download_url": f"/files/{encoded_filename}"})
     except Exception as ydl_err:
+        last_error = str(ydl_err)
         print(f"yt-dlp download failed: {ydl_err}. Attempting fallback...")
 
     # Fallback via direct streams
@@ -171,7 +184,10 @@ def download_video():
                 try:
                     if a_fmt and a_fmt.get('url'):
                         cmd = [
-                            'ffmpeg', '-y',
+                            ffmpeg_exe, '-y',
+                            '-reconnect', '1',
+                            '-reconnect_streamed', '1',
+                            '-reconnect_delay_max', '5',
                             '-i', v_fmt['url'],
                             '-i', a_fmt['url'],
                             '-c:v', 'copy',
@@ -180,19 +196,25 @@ def download_video():
                         ]
                     else:
                         cmd = [
-                            'ffmpeg', '-y',
+                            ffmpeg_exe, '-y',
+                            '-reconnect', '1',
+                            '-reconnect_streamed', '1',
+                            '-reconnect_delay_max', '5',
                             '-i', v_fmt['url'],
                             '-c', 'copy',
                             out_file
                         ]
-                    p = subprocess.run(cmd, capture_output=True, timeout=120)
-                    if p.returncode == 0 and os.path.exists(out_file):
+                    p = subprocess.run(cmd, capture_output=True, timeout=180)
+                    if p.returncode == 0 and os.path.exists(out_file) and os.path.getsize(out_file) > 0:
                         filename = f"{safe_title}.mp4"
                         return jsonify({"success": True, "filename": filename, "download_url": f"/files/{quote(filename)}"})
+                    else:
+                        err_out = p.stderr.decode('utf-8', errors='ignore')[-300:] if p.stderr else "Unknown ffmpeg error"
+                        last_error += f" | Fallback FFmpeg returned code {p.returncode}: {err_out}"
                 except Exception as fb_err:
-                    print(f"Fallback ffmpeg failed: {fb_err}")
+                    last_error += f" | Fallback exception: {str(fb_err)}"
 
-    return jsonify({"success": False, "error": "Download failed. Please try a different quality or check server logs."})
+    return jsonify({"success": False, "error": f"Download failed: {last_error}"})
 
 @app.route('/get-formats', methods=['POST'])
 def get_formats():
@@ -200,11 +222,13 @@ def get_formats():
     if not url:
         return jsonify({"success": False, "error": "Missing URL parameter."})
 
+    ffmpeg_exe = get_ffmpeg()
     ydl_opts = {
         'quiet': True,
         'noplaylist': True,
         'socket_timeout': 30,
         'nocheckcertificate': True,
+        'ffmpeg_location': ffmpeg_exe,
         'js_runtimes': {'node': {}, 'deno': {}},
         'extractor_args': {
             'youtube': {
