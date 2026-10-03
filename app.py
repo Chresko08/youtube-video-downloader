@@ -21,13 +21,18 @@ INVIDIOUS_INSTANCES = [
     "https://invidious.tiekoetter.com"
 ]
 
+DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+
 def get_ffmpeg():
+    import shutil
+    sys_ffmpeg = shutil.which('ffmpeg')
+    if sys_ffmpeg:
+        return sys_ffmpeg
     try:
         import imageio_ffmpeg
         return imageio_ffmpeg.get_ffmpeg_exe()
     except Exception:
-        import shutil
-        return shutil.which('ffmpeg') or 'ffmpeg'
+        return 'ffmpeg'
 
 def extract_video_id(url):
     patterns = [
@@ -48,7 +53,7 @@ def fetch_invidious_data(video_id):
         try:
             req = urllib.request.Request(
                 f"{inst}/api/v1/videos/{video_id}",
-                headers={'User-Agent': 'Mozilla/5.0'}
+                headers={'User-Agent': DEFAULT_UA}
             )
             with urllib.request.urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
@@ -185,10 +190,9 @@ def download_video():
                     if a_fmt and a_fmt.get('url'):
                         cmd = [
                             ffmpeg_exe, '-y',
-                            '-reconnect', '1',
-                            '-reconnect_streamed', '1',
-                            '-reconnect_delay_max', '5',
+                            '-user_agent', DEFAULT_UA,
                             '-i', v_fmt['url'],
+                            '-user_agent', DEFAULT_UA,
                             '-i', a_fmt['url'],
                             '-c:v', 'copy',
                             '-c:a', 'aac',
@@ -197,9 +201,7 @@ def download_video():
                     else:
                         cmd = [
                             ffmpeg_exe, '-y',
-                            '-reconnect', '1',
-                            '-reconnect_streamed', '1',
-                            '-reconnect_delay_max', '5',
+                            '-user_agent', DEFAULT_UA,
                             '-i', v_fmt['url'],
                             '-c', 'copy',
                             out_file
