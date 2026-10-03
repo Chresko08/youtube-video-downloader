@@ -102,12 +102,26 @@ def diag():
         except Exception as e:
             test_res = {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
+    pt_res = {}
+    try:
+        from pytubefix import YouTube
+        has_pt = True
+        if test_url:
+            yt = YouTube(test_url, client='WEB')
+            pt_res = {"success": True, "title": yt.title, "streams": len(yt.streams)}
+    except Exception as pe:
+        has_pt = False
+        pt_res = {"success": False, "error": str(pe)}
+
     return jsonify({
         "status": "ok",
+        "commit": "b069e30_pt",
+        "pytubefix_installed": has_pt,
         "ytdlp_version": yt_dlp.version.__version__,
         "ffmpeg": get_ffmpeg(),
         "clients": clients,
-        "test": test_res
+        "test_ytdlp": test_res,
+        "test_pytube": pt_res
     })
 
 @app.errorhandler(Exception)
