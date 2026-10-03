@@ -112,19 +112,21 @@
 
             if (formats.length === 0) {
                 list.innerHTML = '<p>No video formats found.</p>';
+                document.getElementById('formats-container').style.display = 'block';
                 return;
             }
-
-            // Deduplicate by resolution for cleaner UI? 
-            // Or just show all? Let's show all for now but maybe group?
-            // User asked for "all available options".
 
             formats.forEach(fmt => {
                 const item = document.createElement('div');
                 item.className = 'format-item';
 
                 const info = document.createElement('span');
-                info.textContent = `${fmt.resolution} (${fmt.ext})`;
+                let sizeText = '';
+                if (fmt.filesize > 0) {
+                    const mb = (fmt.filesize / (1024 * 1024)).toFixed(1);
+                    sizeText = ` (~${mb} MB)`;
+                }
+                info.textContent = `${fmt.resolution} (${fmt.ext})${sizeText}`;
 
                 const btn = document.createElement('button');
                 btn.className = 'btn btn-sm';
@@ -141,8 +143,8 @@
 
         function downloadVideo(formatId) {
             document.getElementById('loading').style.display = 'flex';
-            document.getElementById('loading-text').textContent = "Downloading...";
-            document.getElementById('formats-container').style.display = 'none';
+            document.getElementById('loading-text').textContent = "Downloading & processing on server (may take 5-15s)...";
+            document.getElementById('message').style.display = 'none';
 
             const url = document.getElementById('url').value;
             const formData = new FormData();
@@ -167,20 +169,31 @@
                 .then(data => {
                     document.getElementById('loading').style.display = 'none';
                     if (data.success) {
-                        showMessage(`Starting download...`);
-                        // Use anchor tag to force filename
+                        const messageDiv = document.getElementById('message');
+                        messageDiv.innerHTML = `<p style="margin-bottom: 10px;">✅ <strong>Download Complete!</strong> If your download didn't start automatically, click below:</p>`;
+                        
                         const a = document.createElement('a');
                         a.href = data.download_url;
                         a.download = data.filename;
-                        document.body.appendChild(a);
+                        a.className = 'btn';
+                        a.style.display = 'inline-block';
+                        a.style.textDecoration = 'none';
+                        a.textContent = `📥 Save Video (${data.filename})`;
+                        
+                        messageDiv.appendChild(a);
+                        messageDiv.style.display = 'block';
+
+                        // Trigger auto download
+                        document.body.appendChild(a.cloneNode(true));
                         a.click();
-                        document.body.removeChild(a);
                     } else {
                         showMessage(`Error: ${data.error}`);
+                        document.getElementById('formats-container').style.display = 'block';
                     }
                 })
                 .catch(error => {
                     document.getElementById('loading').style.display = 'none';
+                    document.getElementById('formats-container').style.display = 'block';
                     if (error.message.includes('Failed to fetch')) {
                         showMessage(`Error: Network connection lost or server is unreachable. Please verify the backend is running.`);
                     } else {
