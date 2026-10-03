@@ -2,6 +2,10 @@ from flask import Flask, render_template, request, jsonify, send_from_directory,
 import yt_dlp
 import os
 import time
+import re
+import urllib.request
+import json
+import subprocess
 from urllib.parse import quote
 
 app = Flask(__name__)
@@ -9,6 +13,42 @@ app = Flask(__name__)
 DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'downloads')
 if not os.path.exists(DOWNLOADS_DIR):
     os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+
+INVIDIOUS_INSTANCES = [
+    "https://invidious.f5.si",
+    "https://invidious.nerdvpn.de",
+    "https://inv.nadeko.net",
+    "https://invidious.tiekoetter.com"
+]
+
+def extract_video_id(url):
+    patterns = [
+        r'(?:v=|\/)([0-9A-Za-z_-]{11}).*',
+        r'(?:embed\/)([0-9A-Za-z_-]{11})',
+        r'(?:watch\?v=)([0-9A-Za-z_-]{11})',
+        r'youtu\.be\/([0-9A-Za-z_-]{11})',
+        r'shorts\/([0-9A-Za-z_-]{11})'
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, url)
+        if m:
+            return m.group(1)
+    return None
+
+def fetch_invidious_data(video_id):
+    for inst in INVIDIOUS_INSTANCES:
+        try:
+            req = urllib.request.Request(
+                f"{inst}/api/v1/videos/{video_id}",
+                headers={'User-Agent': 'Mozilla/5.0'}
+            )
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+                if 'adaptiveFormats' in data or 'formatStreams' in data:
+                    return data
+        except Exception as e:
+            continue
+    return None
 
 @app.route('/')
 def index():
@@ -29,10 +69,8 @@ def cleanup_downloads():
             for filename in os.listdir(DOWNLOADS_DIR):
                 file_path = os.path.join(DOWNLOADS_DIR, filename)
                 if os.path.isfile(file_path):
-                    # Delete files older than 1 hour
                     if os.stat(file_path).st_mtime < now - 3600:
                         os.remove(file_path)
-                        print(f"Deleted old file: {file_path}")
     except Exception as e:
         print(f"Cleanup error: {e}")
 
@@ -71,9 +109,10 @@ def download_video():
         'nocheckcertificate': True,
         'ignoreerrors': False,
         'no_warnings': False,
+        'js_runtimes': {'node': {}, 'deno': {}},
         'extractor_args': {
             'youtube': {
-                'player_client': ['visionos', 'android']
+                'player_client': ['android', 'visionos']
             }
         },
         'remote_components': ['ejs:github'],
@@ -83,7 +122,6 @@ def download_video():
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info_dict = ydl.extract_info(url, download=True)
             
-            # Find the actual downloaded / converted file
             filename = None
             requested = info_dict.get('requested_downloads')
             if requested:
@@ -105,13 +143,56 @@ def download_video():
                 if not filename and os.path.exists(os.path.join(DOWNLOADS_DIR, candidate)):
                     filename = candidate
 
-            if not filename:
-                return jsonify({"success": False, "error": "File was downloaded but could not be located on server."})
+            if filename:
+                encoded_filename = quote(filename)
+                return jsonify({"success": True, "filename": filename, "download_url": f"/files/{encoded_filename}"})
+    except Exception as ydl_err:
+        print(f"yt-dlp download failed: {ydl_err}. Attempting fallback...")
 
-            encoded_filename = quote(filename)
-            return jsonify({"success": True, "filename": filename, "download_url": f"/files/{encoded_filename}"})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+    # Fallback via direct streams
+    vid_id = extract_video_id(url)
+    if vid_id:
+        inv_data = fetch_invidious_data(vid_id)
+        if inv_data:
+            title = inv_data.get('title', f"video_{vid_id}")
+            safe_title = re.sub(r'[\\/*?:"<>|]', "", title)[:100]
+            out_file = os.path.join(DOWNLOADS_DIR, f"{safe_title}.mp4")
+
+            adaptive = inv_data.get('adaptiveFormats', [])
+            v_fmt = None
+            if format_id:
+                v_fmt = next((f for f in adaptive if str(f.get('itag')) == str(format_id) and f.get('url')), None)
+            if not v_fmt:
+                v_fmt = next((f for f in adaptive if 'video' in f.get('type', '') and f.get('url')), None)
+
+            a_fmt = next((f for f in adaptive if 'audio' in f.get('type', '') and f.get('url')), None)
+
+            if v_fmt and v_fmt.get('url'):
+                try:
+                    if a_fmt and a_fmt.get('url'):
+                        cmd = [
+                            'ffmpeg', '-y',
+                            '-i', v_fmt['url'],
+                            '-i', a_fmt['url'],
+                            '-c:v', 'copy',
+                            '-c:a', 'aac',
+                            out_file
+                        ]
+                    else:
+                        cmd = [
+                            'ffmpeg', '-y',
+                            '-i', v_fmt['url'],
+                            '-c', 'copy',
+                            out_file
+                        ]
+                    p = subprocess.run(cmd, capture_output=True, timeout=120)
+                    if p.returncode == 0 and os.path.exists(out_file):
+                        filename = f"{safe_title}.mp4"
+                        return jsonify({"success": True, "filename": filename, "download_url": f"/files/{quote(filename)}"})
+                except Exception as fb_err:
+                    print(f"Fallback ffmpeg failed: {fb_err}")
+
+    return jsonify({"success": False, "error": "Download failed. Please try a different quality or check server logs."})
 
 @app.route('/get-formats', methods=['POST'])
 def get_formats():
@@ -124,9 +205,10 @@ def get_formats():
         'noplaylist': True,
         'socket_timeout': 30,
         'nocheckcertificate': True,
+        'js_runtimes': {'node': {}, 'deno': {}},
         'extractor_args': {
             'youtube': {
-                'player_client': ['visionos', 'android']
+                'player_client': ['android', 'visionos']
             }
         },
         'remote_components': ['ejs:github'],
@@ -160,12 +242,45 @@ def get_formats():
                                     formats[i] = fmt
                                 break
             
-            # Sort by resolution descending (e.g. 2160p, 1080p, 720p...)
             formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
-            
-            return jsonify({"success": True, "formats": formats, "title": info.get('title')})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+            if formats:
+                return jsonify({"success": True, "formats": formats, "title": info.get('title')})
+    except Exception as ydl_err:
+        print(f"yt-dlp format extraction failed: {ydl_err}. Trying fallback...")
+
+    # Fallback via Invidious API
+    vid_id = extract_video_id(url)
+    if vid_id:
+        inv_data = fetch_invidious_data(vid_id)
+        if inv_data:
+            formats = []
+            seen_res = set()
+            for f in inv_data.get('adaptiveFormats', []):
+                if 'video' in f.get('type', '') and f.get('resolution'):
+                    res = f.get('resolution')
+                    clen = int(f.get('clen', 0)) if f.get('clen', '').isdigit() else 0
+                    container = f.get('container', 'mp4') or 'mp4'
+                    
+                    fmt = {
+                        'format_id': str(f.get('itag', res)),
+                        'ext': container,
+                        'resolution': res,
+                        'filesize': clen,
+                        'note': f.get('encoding')
+                    }
+                    if res not in seen_res:
+                        seen_res.add(res)
+                        formats.append(fmt)
+                    else:
+                        for i, existing in enumerate(formats):
+                            if existing['resolution'] == res and (fmt['ext'] == 'mp4' or fmt['filesize'] > existing['filesize']):
+                                formats[i] = fmt
+                                break
+            formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
+            if formats:
+                return jsonify({"success": True, "formats": formats, "title": inv_data.get('title')})
+
+    return jsonify({"success": False, "error": "Unable to extract video formats. Please verify the URL or try again."})
 
 @app.route('/files/<path:filename>')
 def serve_file(filename):
