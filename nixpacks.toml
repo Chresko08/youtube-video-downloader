@@ -3,7 +3,7 @@ nixPkgs = ["ffmpeg", "nodejs"]
 aptPkgs = ["ffmpeg", "nodejs"]
 
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["pip install --no-cache-dir -U -r requirements.txt"]
 
 [start]
 cmd = "gunicorn --timeout 300 app:app"

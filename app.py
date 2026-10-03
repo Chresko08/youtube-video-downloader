@@ -71,6 +71,20 @@ def index():
     response.headers['Expires'] = '0'
     return response
 
+@app.route('/api/diag')
+def diag():
+    clients = []
+    try:
+        clients = list(yt_dlp.extractor.youtube.YoutubeIE._get_requested_clients.__globals__['INNERTUBE_CLIENTS'].keys())
+    except Exception:
+        pass
+    return jsonify({
+        "status": "ok",
+        "ytdlp_version": yt_dlp.version.__version__,
+        "ffmpeg": get_ffmpeg(),
+        "clients": clients
+    })
+
 @app.errorhandler(Exception)
 def handle_exception(e):
     return jsonify({"success": False, "error": f"Server Error: {str(e)}"}), 500
