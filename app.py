@@ -51,6 +51,30 @@ def extract_video_id(url):
             return m.group(1)
     return None
 
+def build_format_selector(format_id):
+    if not format_id:
+        return 'bestvideo+bestaudio/best'
+    fid = str(format_id).strip()
+    if fid.isdigit():
+        return f'{fid}+bestaudio/{fid}+140/{fid}+ba/{fid}'
+    height_match = fid.rstrip('pP')
+    if height_match.isdigit():
+        h = int(height_match)
+        return f'bestvideo[height<={h}]+bestaudio/best[height<={h}]/best'
+    return f'{fid}+bestaudio/{fid}'
+
+def cleanup_downloads():
+    now = time.time()
+    try:
+        if os.path.exists(DOWNLOADS_DIR):
+            for filename in os.listdir(DOWNLOADS_DIR):
+                file_path = os.path.join(DOWNLOADS_DIR, filename)
+                if os.path.isfile(file_path):
+                    if os.stat(file_path).st_mtime < now - 3600:
+                        os.remove(file_path)
+    except Exception as e:
+        print(f"Cleanup error: {e}")
+
 def fetch_invidious_data(video_id):
     for inst in INVIDIOUS_INSTANCES:
         try:
@@ -58,7 +82,7 @@ def fetch_invidious_data(video_id):
                 f"{inst}/api/v1/videos/{video_id}",
                 headers={'User-Agent': DEFAULT_UA}
             )
-            with urllib.request.urlopen(req, timeout=8) as resp:
+            with urllib.request.urlopen(req, timeout=6) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
                 if 'adaptiveFormats' in data or 'formatStreams' in data:
                     return data
@@ -84,7 +108,7 @@ class InvidiousProxyDownloader:
             return
         try:
             req = urllib.request.Request(self.instance + '/', headers={'User-Agent': self.user_agent})
-            html = self.opener.open(req, timeout=10).read().decode('utf-8', errors='ignore')
+            html = self.opener.open(req, timeout=8).read().decode('utf-8', errors='ignore')
             m = re.search(r'<script id="anubis_challenge" type="application/json">(.*?)</script>', html, re.DOTALL)
             if not m:
                 self.solved = True
@@ -101,7 +125,7 @@ class InvidiousProxyDownloader:
                     break
                 nonce += 1
             pass_url = f'{self.instance}/.within.website/x/cmd/anubis/api/pass-challenge?id={c_info["id"]}&response={h}&nonce={nonce}&redir=/&elapsedTime=150'
-            self.opener.open(urllib.request.Request(pass_url, headers={'User-Agent': self.user_agent}), timeout=10)
+            self.opener.open(urllib.request.Request(pass_url, headers={'User-Agent': self.user_agent}), timeout=8)
             self.solved = True
         except Exception as e:
             print(f"Anubis solve notice: {e}")
@@ -110,14 +134,13 @@ class InvidiousProxyDownloader:
         self.ensure_authenticated()
         proxy_url = self.to_proxy_url(stream_url)
         req = urllib.request.Request(proxy_url, headers={'User-Agent': self.user_agent})
-        with self.opener.open(req, timeout=120) as resp:
+        with self.opener.open(req, timeout=40) as resp:
             content_type = resp.headers.get('Content-Type', '')
             if 'text/html' in content_type:
-                # Re-authenticate if challenge triggered
                 self.solved = False
                 self.ensure_authenticated()
                 req2 = urllib.request.Request(proxy_url, headers={'User-Agent': self.user_agent})
-                resp = self.opener.open(req2, timeout=120)
+                resp = self.opener.open(req2, timeout=40)
 
             with open(target_path, 'wb') as f:
                 while chunk := resp.read(65536):
@@ -148,7 +171,7 @@ class InvidiousProxyDownloader:
             if a_fmt and a_fmt.get('url'):
                 self.download_stream(a_fmt['url'], a_temp)
                 cmd = [ffmpeg_exe, '-y', '-i', v_temp, '-i', a_temp, '-c:v', 'copy', '-c:a', 'aac', out_file]
-                p = subprocess.run(cmd, capture_output=True, timeout=180)
+                p = subprocess.run(cmd, capture_output=True, timeout=120)
                 if p.returncode != 0:
                     raise Exception(f"FFmpeg mux error {p.returncode}: {p.stderr.decode('utf-8', errors='ignore')[:200]}")
             else:
@@ -163,6 +186,119 @@ class InvidiousProxyDownloader:
 
         return os.path.exists(out_file) and os.path.getsize(out_file) > 0
 
+def download_with_ytdlp(url, format_id, ffmpeg_exe):
+    outtmpl = os.path.join(DOWNLOADS_DIR, '%(title)s_%(id)s.%(ext)s')
+    format_selector = build_format_selector(format_id)
+
+    ydl_opts = {
+        'format': format_selector,
+        'outtmpl': outtmpl,
+        'merge_output_format': 'mp4',
+        'ffmpeg_location': ffmpeg_exe,
+        'noplaylist': True,
+        'socket_timeout': 30,
+        'nocheckcertificate': True,
+        'ignoreerrors': False,
+        'no_warnings': False,
+        'js_runtimes': {'node': {}},
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['web_embedded', 'android', 'ios', 'tv_simply', 'mweb'],
+                'player_skip': ['webpage']
+            }
+        },
+    }
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info_dict = ydl.extract_info(url, download=True)
+        filename = None
+        requested = info_dict.get('requested_downloads')
+        if requested:
+            for req_item in requested:
+                fp = req_item.get('filepath')
+                if fp and os.path.exists(fp):
+                    filename = os.path.basename(fp)
+                    break
+
+        if not filename:
+            video_title = ydl.prepare_filename(info_dict)
+            candidate = os.path.basename(video_title)
+            base, _ = os.path.splitext(candidate)
+            for ext in ['.mp4', '.mkv', '.webm']:
+                candidate_path = os.path.join(DOWNLOADS_DIR, base + ext)
+                if os.path.exists(candidate_path):
+                    filename = base + ext
+                    break
+            if not filename and os.path.exists(os.path.join(DOWNLOADS_DIR, candidate)):
+                filename = candidate
+
+        if filename and os.path.exists(os.path.join(DOWNLOADS_DIR, filename)):
+            return filename
+    return None
+
+def download_with_pytubefix(url, format_id, ffmpeg_exe):
+    from pytubefix import YouTube
+    for client in ['ANDROID', 'WEB']:
+        try:
+            yt = YouTube(url, client=client)
+            title = yt.title or f"video_{int(time.time())}"
+            safe_title = re.sub(r'[\\/*?:\'\"<>|]', '', title)[:100].strip() or f"video_{int(time.time())}"
+            timestamp = int(time.time())
+            out_filename = f"{safe_title}_{timestamp}.mp4"
+            out_file = os.path.join(DOWNLOADS_DIR, out_filename)
+
+            stream = None
+            if format_id and str(format_id).isdigit():
+                try:
+                    stream = yt.streams.get_by_itag(int(format_id))
+                except Exception:
+                    pass
+            if not stream and format_id:
+                itag_map = {
+                    '401': '2160p', '400': '1440p', '399': '1080p', '398': '720p',
+                    '397': '480p', '396': '360p', '395': '240p', '394': '144p',
+                    '160': '144p', '133': '240p', '134': '360p', '135': '480p', '136': '720p'
+                }
+                target_res = itag_map.get(str(format_id), str(format_id))
+                stream = yt.streams.filter(res=target_res, mime_type='video/mp4').first() or yt.streams.filter(res=target_res).first()
+
+            if not stream:
+                stream = yt.streams.get_highest_resolution() or yt.streams.first()
+
+            if not stream:
+                continue
+
+            if stream.is_progressive:
+                stream.download(output_path=DOWNLOADS_DIR, filename=out_filename)
+                if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+                    return out_filename
+            else:
+                temp_v = os.path.join(DOWNLOADS_DIR, f"temp_v_{timestamp}.{stream.subtype or 'mp4'}")
+                stream.download(output_path=DOWNLOADS_DIR, filename=os.path.basename(temp_v))
+
+                a_stream = yt.streams.get_audio_only()
+                if a_stream:
+                    temp_a = os.path.join(DOWNLOADS_DIR, f"temp_a_{timestamp}.{a_stream.subtype or 'm4a'}")
+                    a_stream.download(output_path=DOWNLOADS_DIR, filename=os.path.basename(temp_a))
+
+                    cmd = [ffmpeg_exe, '-y', '-i', temp_v, '-i', temp_a, '-c:v', 'copy', '-c:a', 'aac', out_file]
+                    subprocess.run(cmd, capture_output=True, timeout=120)
+                    if os.path.exists(temp_a):
+                        try: os.remove(temp_a)
+                        except Exception: pass
+                    if os.path.exists(temp_v):
+                        try: os.remove(temp_v)
+                        except Exception: pass
+                    if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
+                        return out_filename
+                else:
+                    os.rename(temp_v, out_file)
+                    return out_filename
+        except Exception as e:
+            print(f"pytubefix ({client}) attempt failed: {e}")
+            continue
+    return None
+
 @app.route('/')
 def index():
     response = make_response(render_template('index.html'))
@@ -173,34 +309,15 @@ def index():
 
 @app.route('/api/diag')
 def diag():
-    clients = []
-    try:
-        clients = list(yt_dlp.extractor.youtube.YoutubeIE._get_requested_clients.__globals__['INNERTUBE_CLIENTS'].keys())
-    except Exception:
-        pass
-
     return jsonify({
         "status": "ok",
-        "engine": "InvidiousProxyDownloader+pytubefix+ytdlp",
-        "ffmpeg": get_ffmpeg(),
-        "clients": clients
+        "engines": ["yt-dlp", "pytubefix", "InvidiousProxyDownloader"],
+        "ffmpeg": get_ffmpeg()
     })
 
 @app.errorhandler(Exception)
 def handle_exception(e):
     return jsonify({"success": False, "error": f"Server Error: {str(e)}"}), 500
-
-def cleanup_downloads():
-    now = time.time()
-    try:
-        if os.path.exists(DOWNLOADS_DIR):
-            for filename in os.listdir(DOWNLOADS_DIR):
-                file_path = os.path.join(DOWNLOADS_DIR, filename)
-                if os.path.isfile(file_path):
-                    if os.stat(file_path).st_mtime < now - 3600:
-                        os.remove(file_path)
-    except Exception as e:
-        print(f"Cleanup error: {e}")
 
 @app.route('/download', methods=['POST'])
 def download_video():
@@ -214,7 +331,33 @@ def download_video():
     vid_id = extract_video_id(url)
     last_error = ""
 
-    # Engine 1: Invidious Proxy with Anubis PoW solver (Works 100% on datacenter IPs without YouTube bot bans)
+    # Engine 1: yt-dlp with player_skip: ['webpage'] & web_embedded/android/ios/tv_simply
+    try:
+        filename = download_with_ytdlp(url, format_id, ffmpeg_exe)
+        if filename:
+            return jsonify({
+                "success": True,
+                "filename": filename,
+                "download_url": f"/files/{quote(filename)}"
+            })
+    except Exception as ydl_err:
+        last_error += f"yt-dlp: {ydl_err} | "
+        print(f"Engine 1 (yt-dlp) failed: {ydl_err}. Trying Engine 2...")
+
+    # Engine 2: pytubefix (ANDROID client)
+    try:
+        filename = download_with_pytubefix(url, format_id, ffmpeg_exe)
+        if filename:
+            return jsonify({
+                "success": True,
+                "filename": filename,
+                "download_url": f"/files/{quote(filename)}"
+            })
+    except Exception as pt_err:
+        last_error += f"pytubefix: {pt_err} | "
+        print(f"Engine 2 (pytubefix) failed: {pt_err}. Trying Engine 3...")
+
+    # Engine 3: Invidious Proxy with Anubis solver fallback
     if vid_id:
         try:
             inv_data = fetch_invidious_data(vid_id)
@@ -232,122 +375,11 @@ def download_video():
                         "filename": out_filename,
                         "download_url": f"/files/{quote(out_filename)}"
                     })
-        except Exception as e:
-            last_error += f"InvidiousProxy: {str(e)} | "
-            print(f"Invidious proxy failed: {e}. Trying pytubefix...")
+        except Exception as inv_err:
+            last_error += f"InvidiousProxy: {inv_err} | "
+            print(f"Engine 3 (Invidious) failed: {inv_err}")
 
-    # Engine 2: pytubefix
-    try:
-        from pytubefix import YouTube
-        yt = YouTube(url, client='WEB')
-        title = yt.title or f"video_{int(time.time())}"
-        safe_title = re.sub(r'[\\/*?:\'\"<>|]', '', title)[:100].strip() or f"video_{int(time.time())}"
-        timestamp = int(time.time())
-        out_filename = f"{safe_title}_{timestamp}.mp4"
-        out_file = os.path.join(DOWNLOADS_DIR, out_filename)
-
-        stream = None
-        if format_id:
-            try:
-                stream = yt.streams.get_by_itag(int(format_id))
-            except Exception:
-                pass
-            if not stream:
-                itag_map = {
-                    '401': '2160p', '400': '1440p', '399': '1080p', '398': '720p',
-                    '397': '480p', '396': '360p', '395': '240p', '394': '144p'
-                }
-                target_res = itag_map.get(str(format_id))
-                if target_res:
-                    stream = yt.streams.filter(res=target_res, mime_type='video/mp4').first() or yt.streams.filter(res=target_res).first()
-
-        if not stream:
-            stream = yt.streams.get_highest_resolution() or yt.streams.first()
-
-        if stream:
-            if stream.is_progressive:
-                stream.download(output_path=DOWNLOADS_DIR, filename=out_filename)
-                if os.path.exists(out_file) and os.path.getsize(out_file) > 0:
-                    return jsonify({"success": True, "filename": out_filename, "download_url": f"/files/{quote(out_filename)}"})
-            else:
-                temp_v = os.path.join(DOWNLOADS_DIR, f"temp_v_{timestamp}.{stream.subtype or 'mp4'}")
-                stream.download(output_path=DOWNLOADS_DIR, filename=os.path.basename(temp_v))
-
-                a_stream = yt.streams.get_audio_only()
-                if a_stream:
-                    temp_a = os.path.join(DOWNLOADS_DIR, f"temp_a_{timestamp}.{a_stream.subtype or 'm4a'}")
-                    a_stream.download(output_path=DOWNLOADS_DIR, filename=os.path.basename(temp_a))
-
-                    cmd = [ffmpeg_exe, '-y', '-i', temp_v, '-i', temp_a, '-c:v', 'copy', '-c:a', 'aac', out_file]
-                    p = subprocess.run(cmd, capture_output=True, timeout=180)
-                    if os.path.exists(temp_a): os.remove(temp_a)
-                    if os.path.exists(temp_v): os.remove(temp_v)
-                    if p.returncode == 0 and os.path.exists(out_file) and os.path.getsize(out_file) > 0:
-                        return jsonify({"success": True, "filename": out_filename, "download_url": f"/files/{quote(out_filename)}"})
-                else:
-                    os.rename(temp_v, out_file)
-                    return jsonify({"success": True, "filename": out_filename, "download_url": f"/files/{quote(out_filename)}"})
-    except Exception as pt_err:
-        last_error += f"pytubefix: {pt_err} | "
-        print(f"pytubefix download failed: {pt_err}. Trying yt-dlp...")
-
-    # Engine 3: yt-dlp
-    outtmpl = os.path.join(DOWNLOADS_DIR, '%(title)s.%(ext)s')
-    if format_id:
-        format_selector = f'{format_id}+234/{format_id}+233/{format_id}+bestaudio/{format_id}'
-    else:
-        format_selector = 'bestvideo+234/bestvideo+233/bestvideo+bestaudio/best'
-
-    ydl_opts = {
-        'format': format_selector,
-        'outtmpl': outtmpl,
-        'merge_output_format': 'mp4',
-        'ffmpeg_location': ffmpeg_exe,
-        'noplaylist': True,
-        'socket_timeout': 45,
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'no_warnings': False,
-        'js_runtimes': {'node': {}, 'deno': {}},
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['visionos', 'mweb']
-            }
-        },
-        'remote_components': ['ejs:github'],
-    }
-
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(url, download=True)
-            filename = None
-            requested = info_dict.get('requested_downloads')
-            if requested:
-                for req_item in requested:
-                    fp = req_item.get('filepath')
-                    if fp and os.path.exists(fp):
-                        filename = os.path.basename(fp)
-                        break
-
-            if not filename:
-                video_title = ydl.prepare_filename(info_dict)
-                candidate = os.path.basename(video_title)
-                base, _ = os.path.splitext(candidate)
-                for ext in ['.mp4', '.mkv', '.webm']:
-                    candidate_path = os.path.join(DOWNLOADS_DIR, base + ext)
-                    if os.path.exists(candidate_path):
-                        filename = base + ext
-                        break
-                if not filename and os.path.exists(os.path.join(DOWNLOADS_DIR, candidate)):
-                    filename = candidate
-
-            if filename:
-                encoded_filename = quote(filename)
-                return jsonify({"success": True, "filename": filename, "download_url": f"/files/{encoded_filename}"})
-    except Exception as ydl_err:
-        last_error += f"yt-dlp: {ydl_err}"
-
-    return jsonify({"success": False, "error": f"Download failed: {last_error}"})
+    return jsonify({"success": False, "error": f"Download failed across all engines: {last_error}"})
 
 @app.route('/get-formats', methods=['POST'])
 def get_formats():
@@ -355,7 +387,91 @@ def get_formats():
     if not url:
         return jsonify({"success": False, "error": "Missing URL parameter."})
 
-    # Strategy 1: Invidious (Clean, reliable format extraction from ISP IP)
+    # Strategy 1: yt-dlp with player_skip: ['webpage']
+    try:
+        ffmpeg_exe = get_ffmpeg()
+        ydl_opts = {
+            'quiet': True,
+            'noplaylist': True,
+            'socket_timeout': 25,
+            'nocheckcertificate': True,
+            'ffmpeg_location': ffmpeg_exe,
+            'js_runtimes': {'node': {}},
+            'extractor_args': {
+                'youtube': {
+                    'player_client': ['web_embedded', 'android', 'ios', 'tv_simply', 'mweb'],
+                    'player_skip': ['webpage']
+                }
+            },
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            formats = []
+            seen_resolutions = set()
+            for f in info.get('formats', []):
+                if f.get('vcodec') != 'none' and f.get('height'):
+                    resolution = f'{f.get("height")}p'
+                    filesize = f.get('filesize') or f.get('filesize_approx') or 0
+                    if not filesize and f.get('tbr') and info.get('duration'):
+                        filesize = int(info['duration'] * f['tbr'] * 128)
+                    fmt = {
+                        'format_id': str(f.get('format_id')),
+                        'ext': f.get('ext', 'mp4'),
+                        'resolution': resolution,
+                        'filesize': filesize,
+                        'note': f.get('format_note')
+                    }
+                    if resolution not in seen_resolutions:
+                        seen_resolutions.add(resolution)
+                        formats.append(fmt)
+                    else:
+                        for i, existing_fmt in enumerate(formats):
+                            if existing_fmt['resolution'] == resolution:
+                                if (fmt['ext'] == 'mp4' and existing_fmt['ext'] != 'mp4') or (fmt['filesize'] > existing_fmt['filesize']):
+                                    formats[i] = fmt
+                                break
+            formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
+            if formats:
+                return jsonify({"success": True, "formats": formats, "title": info.get('title')})
+    except Exception as ydl_err:
+        print(f"Strategy 1 (yt-dlp) get-formats failed: {ydl_err}. Trying Strategy 2...")
+
+    # Strategy 2: pytubefix (ANDROID)
+    try:
+        from pytubefix import YouTube
+        yt = YouTube(url, client='ANDROID')
+        formats = []
+        seen_resolutions = set()
+
+        for s in yt.streams.filter(progressive=True):
+            if s.resolution and s.resolution not in seen_resolutions:
+                seen_resolutions.add(s.resolution)
+                formats.append({
+                    'format_id': str(s.itag),
+                    'ext': s.subtype or 'mp4',
+                    'resolution': s.resolution,
+                    'filesize': s.filesize or 0,
+                    'note': 'Progressive'
+                })
+
+        for s in yt.streams.filter(only_video=True):
+            if s.resolution and s.resolution not in seen_resolutions:
+                seen_resolutions.add(s.resolution)
+                formats.append({
+                    'format_id': str(s.itag),
+                    'ext': s.subtype or 'mp4',
+                    'resolution': s.resolution,
+                    'filesize': s.filesize or 0,
+                    'note': f"{s.fps}fps {s.video_codec}"
+                })
+
+        formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
+        if formats:
+            return jsonify({"success": True, "formats": formats, "title": yt.title})
+    except Exception as pt_err:
+        print(f"Strategy 2 (pytubefix) get-formats failed: {pt_err}. Trying Strategy 3...")
+
+    # Strategy 3: Invidious API
     vid_id = extract_video_id(url)
     if vid_id:
         try:
@@ -386,92 +502,8 @@ def get_formats():
                 formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
                 if formats:
                     return jsonify({"success": True, "formats": formats, "title": inv_data.get('title')})
-        except Exception as e:
-            print(f"Invidious format extraction failed: {e}")
-
-    # Strategy 2: pytubefix
-    try:
-        from pytubefix import YouTube
-        yt = YouTube(url, client='WEB')
-        formats = []
-        seen_resolutions = set()
-
-        for s in yt.streams.filter(progressive=True):
-            if s.resolution and s.resolution not in seen_resolutions:
-                seen_resolutions.add(s.resolution)
-                formats.append({
-                    'format_id': str(s.itag),
-                    'ext': s.subtype or 'mp4',
-                    'resolution': s.resolution,
-                    'filesize': s.filesize or 0,
-                    'note': 'Progressive'
-                })
-
-        for s in yt.streams.filter(only_video=True):
-            if s.resolution and s.resolution not in seen_resolutions:
-                seen_resolutions.add(s.resolution)
-                formats.append({
-                    'format_id': str(s.itag),
-                    'ext': s.subtype or 'mp4',
-                    'resolution': s.resolution,
-                    'filesize': s.filesize or 0,
-                    'note': f"{s.fps}fps {s.video_codec}"
-                })
-
-        formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
-        if formats:
-            return jsonify({"success": True, "formats": formats, "title": yt.title})
-    except Exception as pt_err:
-        print(f"pytubefix get_formats failed: {pt_err}. Trying yt-dlp...")
-
-    # Strategy 3: yt-dlp
-    ffmpeg_exe = get_ffmpeg()
-    ydl_opts = {
-        'quiet': True,
-        'noplaylist': True,
-        'socket_timeout': 30,
-        'nocheckcertificate': True,
-        'ffmpeg_location': ffmpeg_exe,
-        'js_runtimes': {'node': {}, 'deno': {}},
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['visionos', 'mweb']
-            }
-        },
-        'remote_components': ['ejs:github'],
-    }
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            formats = []
-            seen_resolutions = set()
-            for f in info.get('formats', []):
-                if f.get('vcodec') != 'none' and f.get('height'):
-                    resolution = f'{f.get("height")}p'
-                    filesize = f.get('filesize') or f.get('filesize_approx') or 0
-                    if not filesize and f.get('tbr') and info.get('duration'):
-                        filesize = int(info['duration'] * f['tbr'] * 128)
-                    fmt = {
-                        'format_id': f['format_id'],
-                        'ext': f.get('ext', 'mp4'),
-                        'resolution': resolution,
-                        'filesize': filesize,
-                        'note': f.get('format_note')
-                    }
-                    if resolution not in seen_resolutions:
-                        seen_resolutions.add(resolution)
-                        formats.append(fmt)
-                    else:
-                        for i, existing_fmt in enumerate(formats):
-                            if existing_fmt['resolution'] == resolution:
-                                if (fmt['ext'] == 'mp4' and existing_fmt['ext'] != 'mp4') or (fmt['filesize'] > existing_fmt['filesize']):
-                                    formats[i] = fmt
-                                break
-            formats.sort(key=lambda x: int(x['resolution'].replace('p', '')) if x['resolution'][:-1].isdigit() else 0, reverse=True)
-            if formats:
-                return jsonify({"success": True, "formats": formats, "title": info.get('title')})
-    except Exception as ydl_err:
-        print(f"yt-dlp format extraction failed: {ydl_err}")
+        except Exception as inv_err:
+            print(f"Strategy 3 (Invidious) get-formats failed: {inv_err}")
 
     return jsonify({"success": False, "error": "Unable to extract video formats. Please verify the URL or try again."})
 

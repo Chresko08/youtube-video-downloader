@@ -6,4 +6,4 @@ aptPkgs = ["ffmpeg", "nodejs"]
 cmds = ["pip install --no-cache-dir -U -r requirements.txt"]
 
 [start]
-cmd = "gunicorn --timeout 300 app:app"
+cmd = "gunicorn -c gunicorn.conf.py app:app"
